@@ -1,0 +1,11 @@
+{
+  "rules": {
+    "players": {
+      ".read": false,
+      "$uid": {
+        ".write": "$uid.length >= 16 && $uid.length <= 40",
+        ".validate": "newData.hasChildren(['best_day','last_seen'])"
+      }
+    }
+  }
+}

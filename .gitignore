@@ -1,0 +1,9 @@
+.godot/
+build/
+android/
+*.translation
+export_credentials.cfg
+*.keystore
+*.apk
+*.aab
+*.tpz
