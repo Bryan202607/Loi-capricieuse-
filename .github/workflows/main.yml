@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Importer le projet envoyé (projet.zip)
+      - name: Importer le projet envoye (projet.zip)
         run: |
           if [ -f projet.zip ]; then
             unzip -o -q projet.zip
@@ -39,7 +39,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Installer Godot et les modèles d'export
+      - name: Installer Godot et les modeles d export
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
           unzip -q Godot_v4.3-stable_linux.x86_64.zip
@@ -49,7 +49,7 @@ jobs:
           unzip -q -j Godot_v4.3-stable_export_templates.tpz "templates/*" -d ~/.local/share/godot/export_templates/4.3.stable
           rm -f Godot_v4.3-stable_export_templates.tpz Godot_v4.3-stable_linux.x86_64.zip
 
-      - name: Installer l'Android SDK
+      - name: Installer Android SDK
         run: |
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           SDKM=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager
@@ -64,7 +64,7 @@ jobs:
           export/android/java_sdk_path = "$JAVA_HOME"
           EOF
 
-      - name: Clé de signature Android
+      - name: Cle de signature Android
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -73,7 +73,7 @@ jobs:
             echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
             PASS="$KS_PASS"
           else
-            echo "::warning::Pas de clé secrète trouvée : clé temporaire utilisée. L'AAB ne sera pas accepté par le Play Store."
+            echo "::warning::Pas de cle secrete trouvee : cle temporaire utilisee. L'AAB ne sera pas accepte par le Play Store."
             PASS="temporary-pass"
             keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias lois -keyalg RSA -keysize 2048 -validity 10000 -storepass "$PASS" -keypass "$PASS" -dname "CN=Temporaire"
           fi
@@ -90,7 +90,7 @@ jobs:
           godot --headless --path . --export-release "Web" web/index.html
           test -f web/index.html
 
-      - name: Préparer Android
+      - name: Preparer Android
         run: |
           mkdir -p android/build build/android
           unzip -q -o ~/.local/share/godot/export_templates/4.3.stable/android_source.zip -d android/build
@@ -113,7 +113,7 @@ jobs:
           name: android
           path: build/android/*
 
-      - name: Publier dans « Releases »
+      - name: Publier dans " Releases "
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
@@ -122,9 +122,9 @@ jobs:
             build/android/lois-capricieuses.apk
             build/android/lois-capricieuses.aab
 
-      - name: Mettre à jour la version web dans le dépôt
+      - name: Mettre a jour la version web dans le depot
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add web
-          git diff --cached --quiet || (git commit -m "Mise à jour de la version web" && git push)
+          git diff --cached --quiet || (git commit -m "Mise a jour de la version web" && git push)
