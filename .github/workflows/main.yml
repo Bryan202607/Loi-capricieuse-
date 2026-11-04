@@ -97,9 +97,21 @@ jobs:
           echo "4.3.stable" > android/.build_version
           sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" export_presets.cfg
 
+      - name: Diagnostic Android
+        run: |
+          echo "SDK=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_SDK_ROOT" || true
+          ls "$ANDROID_SDK_ROOT/cmdline-tools" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/platform-tools" | head -30 || true
+          cat ~/.config/godot/editor_settings-4.3.tres || true
+          ls -la android android/build | head -20 || true
+          cat android/.build_version || true
+          echo "KS=$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+          ls -la "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" || true
+          echo "JAVA=$JAVA_HOME"
+
       - name: Exporter l'APK
         run: |
-          godot --headless --path . --export-release "Android APK" build/android/lois-capricieuses.apk
+          godot --headless --path . --export-release "Android APK" build/android/lois-capricieuses.apk 2>&1 | cat -A | tail -40
           test -f build/android/lois-capricieuses.apk
 
       - name: Exporter l'AAB
