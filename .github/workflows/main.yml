@@ -94,7 +94,9 @@ jobs:
         run: |
           mkdir -p android/build build/android
           unzip -q -o ~/.local/share/godot/export_templates/4.3.stable/android_source.zip -d android/build
-          echo "4.3.stable" > android/.build_version
+          printf "4.3.stable" > android/.build_version
+          touch android/build/.gdignore
+          find android/build -name "*.import" -delete
           sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" export_presets.cfg
 
       - name: Diagnostic Android
@@ -110,33 +112,68 @@ jobs:
           echo "JAVA=$JAVA_HOME"
 
       - name: Exporter l'APK
+        id: apk
+        continue-on-error: true
         run: |
-          godot --headless --path . --export-release "Android APK" build/android/lois-capricieuses.apk 2>&1 | cat -A | tail -40
+          mkdir -p build/android
+          for essai in 1 2; do
+            rm -rf android/build/build android/build/.gradle
+            find android/build -name "*.import" -delete
+            godot --headless --path . --export-release "Android APK" build/android/lois-capricieuses.apk > build/apk.log 2>&1 || true
+            test -f build/android/lois-capricieuses.apk && break
+            echo "Essai $essai de l'APK : echec"
+          done
+          tail -60 build/apk.log
           test -f build/android/lois-capricieuses.apk
 
       - name: Exporter l'AAB
+        id: aab
+        continue-on-error: true
         run: |
-          godot --headless --path . --export-release "Android AAB" build/android/lois-capricieuses.aab
+          mkdir -p build/android
+          for essai in 1 2; do
+            rm -rf android/build/build android/build/.gradle
+            find android/build -name "*.import" -delete
+            godot --headless --path . --export-release "Android AAB" build/android/lois-capricieuses.aab > build/aab.log 2>&1 || true
+            test -f build/android/lois-capricieuses.aab && break
+            echo "Essai $essai de l'AAB : echec"
+          done
+          echo "=== Erreurs trouvees ==="
+          grep -n -B3 -A12 "What went wrong\|FAILURE\|error:\|ERROR:" build/aab.log | head -120 || true
+          echo "=== Fin du journal ==="
+          tail -40 build/aab.log
           test -f build/android/lois-capricieuses.aab
 
-      - name: Garder les fichiers
+      - name: Garder les fichiers et les journaux
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android
-          path: build/android/*
+          path: |
+            build/android/*
+            build/*.log
+          if-no-files-found: ignore
 
-      - name: Publier dans " Releases "
+      - name: Publier dans Releases
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Version ${{ github.run_number }}
+          fail_on_unmatched_files: false
           files: |
             build/android/lois-capricieuses.apk
             build/android/lois-capricieuses.aab
 
       - name: Mettre a jour la version web dans le depot
+        if: always()
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add web
-          git diff --cached --quiet || (git commit -m "Mise a jour de la version web" && git push)
+          git add web || true
+          git diff --cached --quiet || (git commit -m "Mise a jour de la version web" && git pull --rebase && git push) || true
+
+      - name: Verifier le resultat
+        run: |
+          test -f build/android/lois-capricieuses.apk
+          test -f build/android/lois-capricieuses.aab
