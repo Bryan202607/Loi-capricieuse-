@@ -1,0 +1,213 @@
+name: Construire le jeu avec AdMob (Godot 4.5)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "projet.zip"
+      - "**/*.gd"
+      - "assets/**"
+      - "export_presets.cfg"
+      - "project.godot"
+      - "main.tscn"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Importer le projet envoye (projet.zip)
+        run: |
+          if [ -f projet.zip ]; then
+            unzip -o -q projet.zip
+            rm projet.zip
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add -A -- . ':!.github'
+            git commit -m "Import du projet" || true
+            git push || true
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installer Godot et les modeles d export
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_linux.x86_64.zip
+          unzip -q Godot_v4.5.1-stable_linux.x86_64.zip
+          sudo mv Godot_v4.5.1-stable_linux.x86_64 /usr/local/bin/godot
+          wget -q https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/4.5.1.stable
+          unzip -q -j Godot_v4.5.1-stable_export_templates.tpz "templates/*" -d ~/.local/share/godot/export_templates/4.5.1.stable
+          rm -f Godot_v4.5.1-stable_export_templates.tpz Godot_v4.5.1-stable_linux.x86_64.zip
+
+      - name: Installer Android SDK
+        run: |
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          SDKM=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager
+          yes | $SDKM --licenses > /dev/null || true
+          $SDKM "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmake;3.10.2.4988404" "ndk;28.1.13356709" > /dev/null
+          mkdir -p ~/.config/godot
+          cat > ~/.config/godot/editor_settings-4.5.tres <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
+      - name: Cle de signature Android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            PASS="$KS_PASS"
+          else
+            echo "::warning::Pas de cle secrete trouvee : cle temporaire utilisee. L'AAB ne sera pas accepte par le Play Store."
+            PASS="temporary-pass"
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias lois -keyalg RSA -keysize 2048 -validity 10000 -storepass "$PASS" -keypass "$PASS" -dname "CN=Temporaire"
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=lois" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+
+      - name: Installer les plugins AdMob et Google Play Billing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/admob"
+          gh release download --repo poingstudios/godot-admob-plugin --pattern 'poing-godot-admob-v*.zip' --dir "$RUNNER_TEMP/admob"
+          unzip -q -o "$RUNNER_TEMP"/admob/poing-godot-admob-v*.zip -d .
+          find addons -maxdepth 2 | head -30
+          cp admob_support/ads_admob.gd ads_admob.gd
+          mkdir -p "$RUNNER_TEMP/billing"
+          gh release download --repo godotengine/godot-google-play-billing --pattern '*.zip' --dir "$RUNNER_TEMP/billing" || gh release download --repo godotengine/godot-google-play-billing --dir "$RUNNER_TEMP/billing"
+          ls -la "$RUNNER_TEMP/billing"
+          for z in "$RUNNER_TEMP"/billing/*.zip; do unzip -q -o "$z" -d .; done
+          cp admob_support/billing_play.gd billing_play.gd
+          PLUG=$(find addons -maxdepth 3 -name plugin.cfg | head -20)
+          echo "Plugins : $PLUG"
+          LIST=""
+          for p in $PLUG; do LIST="$LIST\"res://$p\","; done
+          LIST="${LIST%,}"
+          sed -i 's/config\/features=PackedStringArray("4.3"/config\/features=PackedStringArray("4.5"/' project.godot
+          printf '\n[editor_plugins]\n\nenabled=PackedStringArray(%s)\n' "$LIST" >> project.godot
+          echo "=== Cles de reglage du plugin ==="
+          grep -rhoE '"admob/[A-Za-z0-9_/]+"' addons | sort -u | head -40 || true
+          APPID="${ADMOB_APP_ID:-ca-app-pub-4264558105386111~1239302657}"
+          KEY=$(grep -rhoE '"admob/[A-Za-z0-9_/]*(app_id|application_id)[A-Za-z0-9_/]*"' addons | sort -u | head -1 | tr -d '"')
+          KEYEN=$(grep -rhoE '"admob/[A-Za-z0-9_/]*android[A-Za-z0-9_/]*enabled[A-Za-z0-9_/]*"' addons | sort -u | head -1 | tr -d '"')
+          echo "Cle App ID : $KEY / cle activation : $KEYEN"
+          { echo; echo "[admob]"; } >> project.godot
+          if [ -n "$KEY" ]; then echo "${KEY#admob/}=\"$APPID\"" >> project.godot; fi
+          if [ -n "$KEYEN" ]; then echo "${KEYEN#admob/}=true" >> project.godot; fi
+          tail -15 project.godot
+          sed -i 's/^gradle_build\/min_sdk=.*/gradle_build\/min_sdk="24"/; s/^gradle_build\/target_sdk=.*/gradle_build\/target_sdk="35"/' export_presets.cfg
+
+      - name: Importer les ressources
+        run: godot --headless --path . --import || true
+
+      - name: Exporter la version web
+        run: |
+          mkdir -p web
+          godot --headless --path . --export-release "Web" web/index.html
+          test -f web/index.html
+
+      - name: Preparer Android
+        run: |
+          mkdir -p android/build build/android
+          unzip -q -o ~/.local/share/godot/export_templates/4.5.1.stable/android_source.zip -d android/build
+          printf "4.5.1.stable" > android/.build_version
+          touch android/build/.gdignore
+          find android/build -name "*.import" -delete
+          sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" export_presets.cfg
+
+      - name: Diagnostic Android
+        run: |
+          echo "SDK=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_SDK_ROOT" || true
+          ls "$ANDROID_SDK_ROOT/cmdline-tools" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/platform-tools" | head -30 || true
+          cat ~/.config/godot/editor_settings-4.5.tres || true
+          ls -la android android/build | head -20 || true
+          cat android/.build_version || true
+          echo "KS=$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+          ls -la "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" || true
+          echo "JAVA=$JAVA_HOME"
+
+      - name: Exporter l'APK
+        id: apk
+        continue-on-error: true
+        run: |
+          mkdir -p build/android
+          for essai in 1 2; do
+            rm -rf android/build/build android/build/.gradle
+            find android/build -name "*.import" -delete
+            godot --headless --path . --export-release "Android APK" build/android/lois-capricieuses.apk > build/apk.log 2>&1 || true
+            test -f build/android/lois-capricieuses.apk && break
+            echo "Essai $essai de l'APK : echec"
+          done
+          tail -60 build/apk.log
+          test -f build/android/lois-capricieuses.apk
+
+      - name: Exporter l'AAB
+        id: aab
+        continue-on-error: true
+        run: |
+          mkdir -p build/android
+          for essai in 1 2; do
+            rm -rf android/build/build android/build/.gradle
+            find android/build -name "*.import" -delete
+            godot --headless --path . --export-release "Android AAB" build/android/lois-capricieuses.aab > build/aab.log 2>&1 || true
+            test -f build/android/lois-capricieuses.aab && break
+            echo "Essai $essai de l'AAB : echec"
+          done
+          echo "=== Erreurs trouvees ==="
+          grep -n -B3 -A12 "What went wrong\|FAILURE\|error:\|ERROR:" build/aab.log | head -120 || true
+          echo "=== Fin du journal ==="
+          tail -40 build/aab.log
+          test -f build/android/lois-capricieuses.aab
+
+      - name: Garder les fichiers et les journaux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            build/android/*
+            build/*.log
+          if-no-files-found: ignore
+
+      - name: Publier dans Releases
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Version ${{ github.run_number }}
+          fail_on_unmatched_files: false
+          files: |
+            build/android/lois-capricieuses.apk
+            build/android/lois-capricieuses.aab
+
+      - name: Mettre a jour la version web dans le depot
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add web || true
+          git diff --cached --quiet || (git commit -m "Mise a jour de la version web" && git pull --rebase && git push) || true
+
+      - name: Verifier le resultat
+        run: |
+          test -f build/android/lois-capricieuses.apk
+          test -f build/android/lois-capricieuses.aab
